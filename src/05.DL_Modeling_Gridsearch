@@ -1,5 +1,5 @@
 # ============================================================
-# STEP 15/16. DL GridSearch (MLP, TabNet, FT-Transformer)   - 코드 일부분 발췌 
+# STEP 16. DL GridSearch (MLP, TabNet, FT-Transformer)   - 코드 일부분 발췌 
 # ============================================================
 # 3개 알고리즘(MLP/TabNet/FT-Transformer), Case1~4별로
 # 하이퍼파라미터 그리드서치 수행. 가중치(weight_on)도 탐색
