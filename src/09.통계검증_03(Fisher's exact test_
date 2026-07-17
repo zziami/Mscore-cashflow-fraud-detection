@@ -1,0 +1,33 @@
+# ============================================================
+# STEP 08. z1(가지급금) x z5(이자수익) 조건부 Fisher's exact test
+# ============================================================
+# [질문] 가지급금(z1>0)이 있는 기업 중, 이자수익(z5)이 낮은 쪽이
+#        실제로 분식(y=1) 비율이 더 높은가?
+# [방법] z1>0인 기업만 필터링 → z5를 중앙값 기준 낮음/높음 2그룹
+#        → 2x2 분할표(y=1/0 x z5 낮음/높음) → Fisher's exact test
+# ============================================================
+import numpy as np
+import pandas as pd
+from scipy.stats import fisher_exact
+
+TARGET = "Y"
+data = df[[TARGET, "z1_내부자채권", "z5_이자수익"]].dropna()
+
+# z1>0(가지급금 있음)인 기업만 필터링
+sub = data[data["z1_내부자채권"] > 0].copy()
+
+# z5를 그 안에서 중앙값 기준 낮음/높음 2그룹으로 분할
+median_z5 = sub["z5_이자수익"].median()
+sub["z5_group"] = np.where(sub["z5_이자수익"] <= median_z5, "낮음", "높음")
+
+# 2x2 분할표
+table = pd.crosstab(sub["z5_group"], sub[TARGET])
+a = table.loc["낮음", 1] if 1 in table.columns else 0
+b = table.loc["낮음", 0] if 0 in table.columns else 0
+c = table.loc["높음", 1] if 1 in table.columns else 0
+d = table.loc["높음", 0] if 0 in table.columns else 0
+
+odds_ratio, p_value = fisher_exact([[a, b], [c, d]])
+
+rate_low  = a / (a + b) if (a + b) > 0 else float("nan")
+rate_high = c / (c + d) if (c + d) > 0 else float("nan")
