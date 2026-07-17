@@ -1,0 +1,63 @@
+# ============================================================
+# STEP 15/16. DL GridSearch (MLP, TabNet, FT-Transformer)
+# ============================================================
+# 3개 알고리즘(MLP/TabNet/FT-Transformer), Case1~4별로
+# 하이퍼파라미터 그리드서치 수행. 가중치(weight_on)도 탐색
+# 파라미터에 포함. SMOTE는 ML과 동일하게 Case2/4 Train에만 적용.
+# ============================================================
+import torch
+import torch.nn as nn
+import itertools
+from pytorch_tabnet.tab_model import TabNetClassifier
+from imblearn.over_sampling import SMOTE
+
+RANDOM_STATE = 42
+SMOTE_RATIO = 0.5
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Case별 SMOTE·Scaling 적용 여부 (ML과 동일)
+CASE_CONFIG = {
+    "Case1": {"scaled": False, "smote": False},
+    "Case2": {"scaled": False, "smote": True},
+    "Case3": {"scaled": True,  "smote": False},
+    "Case4": {"scaled": True,  "smote": True},
+}
+
+# 기본 학습조건
+MLP_BASE = {"hidden": [128, 64], "dropout": 0.3, "lr": 0.001, "epochs": 50, "batch_size": 512}
+TABNET_BASE = {"n_d": 8, "n_a": 8, "n_steps": 3, "gamma": 1.3,
+                "n_independent": 2, "n_shared": 2, "max_epochs": 50, "patience": 10, "batch_size": 512}
+FT_BASE = {"d_model": 64, "nhead": 8, "num_layers": 3, "dropout": 0.1, "lr": 0.001, "epochs": 25, "batch_size": 512}
+
+# 최적화(그리드서치) 파라미터
+MLP_GRID = list(itertools.product([0.001, 0.01], [0.2, 0.3], [False, True]))            # lr × dropout × weight_on
+TABNET_GRID = list(itertools.product([8, 16], [3, 5], [1.0, 1.5, 2.0]))                  # n_d/n_a × n_steps × gamma
+FT_GRID = list(itertools.product([0.0001, 0.001], [0.1, 0.3], [2, 3], [4, 8], [False, True]))  # lr × dropout × num_layers × nhead × weight_on
+
+class MLPModel(nn.Module):
+    def __init__(self, input_dim, dropout=0.3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, 128), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, 64),        nn.BatchNorm1d(64),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(64, 1)
+        )
+    def forward(self, x):
+        return self.net(x).squeeze(-1)
+
+class FTTransformer(nn.Module):
+    def __init__(self, input_dim, d_model=64, nhead=8, num_layers=3, dropout=0.1):
+        super().__init__()
+        self.embedding = nn.Linear(input_dim, d_model)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dropout=dropout, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.fc = nn.Linear(d_model, 1)
+    def forward(self, x):
+        x = self.embedding(x).unsqueeze(1)
+        x = self.transformer(x).squeeze(1)
+        return self.fc(x).squeeze(-1)
+
+# Case2/4에만 SMOTE 적용 (Train에만)
+for case_name, config in CASE_CONFIG.items():
+    if config["smote"]:
+        smote = SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)
