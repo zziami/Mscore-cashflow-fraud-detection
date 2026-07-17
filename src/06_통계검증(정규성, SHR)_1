@@ -59,6 +59,9 @@ def scheirer_ray_hare(data, dv, factor1, factor2):
                         "유의성": "유의" if p < ALPHA else "비유의"})
     return pd.DataFrame(results)
 
+
+
+
 # 가정 위반 시(정규성/등분산성 미충족) 비모수검정으로 대체
 if check_assumptions(df):
     srh_results = pd.concat(
