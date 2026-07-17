@@ -1,4 +1,4 @@
-# Fraud-detection-mscore
+#  Mscore-cashflow-fraud-detection
 
 # 자금유출 기반 회계분식 탐지를 위한 한국형 변수 확장 및 모델 검증 - 단독프로젝트 (우수상 수상)
 
