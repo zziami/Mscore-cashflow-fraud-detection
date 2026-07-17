@@ -1,5 +1,5 @@
 # ============================================================
-# STEP 15/16. DL GridSearch (MLP, TabNet, FT-Transformer)
+# STEP 15/16. DL GridSearch (MLP, TabNet, FT-Transformer)   - 코드 일부분 발췌 
 # ============================================================
 # 3개 알고리즘(MLP/TabNet/FT-Transformer), Case1~4별로
 # 하이퍼파라미터 그리드서치 수행. 가중치(weight_on)도 탐색
@@ -71,7 +71,11 @@ class FTTransformer(nn.Module):
         x = self.transformer(x).squeeze(1)
         return self.fc(x).squeeze(-1)
 
-# Case2/4에만 SMOTE 적용 (Train에만)
+
 for case_name, config in CASE_CONFIG.items():
+    steps = []
     if config["smote"]:
-        smote = SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)
+        steps.append(("smote", SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)))
+    steps.append(("clf", base_model))
+    pipe = ImbPipeline(steps)
+    # 이후 pipe.fit(X_train, y_train) 호출 시 SMOTE가 Train에만 자동 적용됨
