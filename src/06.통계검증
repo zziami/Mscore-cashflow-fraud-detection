@@ -1,0 +1,67 @@
+# ============================================================
+# STEP 05. 통계검증 — 정규성/등분산성 검토 → Scheirer-Ray-Hare
+# ============================================================
+# Case1~4 fold 성능값(Recall/F2/AUC_ROC/AUC_PR)에 대해
+# Shapiro-Wilk(정규성) + Levene(등분산성) 검정 →
+# 가정 위반 시 이원 ANOVA 대신 Scheirer-Ray-Hare(비모수) 실행
+# 요인 구조: ModelSet(TypeA/B) × Case(1~4)
+# ============================================================
+import numpy as np
+import pandas as pd
+from scipy import stats
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+
+METRICS = ["Recall", "F2", "AUC_ROC", "AUC_PR"]
+ALPHA = 0.05
+
+def check_assumptions(df):
+    """Shapiro-Wilk(정규성) + Levene(등분산성) 검정"""
+    violation_found = False
+    for metric in METRICS:
+        group_values = {}
+        for (ms, case), g in df.groupby(["ModelSet", "Case"]):
+            vals = g[metric].dropna().values
+            if len(vals) < 3:
+                continue
+            _, p = stats.shapiro(vals)
+            if p < ALPHA:
+                violation_found = True
+            group_values[(ms, case)] = vals
+
+        _, levene_p = stats.levene(*group_values.values())
+        if levene_p < ALPHA:
+            violation_found = True
+    return violation_found
+
+def scheirer_ray_hare(data, dv, factor1, factor2):
+    """Scheirer-Ray-Hare test: 순위변환 후 이원분산분석 방식"""
+    d = data[[factor1, factor2, dv]].dropna().copy()
+    d["rank"] = d[dv].rank()
+    N = len(d)
+
+    model = ols(f"rank ~ C({factor1}) + C({factor2}) + C({factor1}):C({factor2})", data=d).fit()
+    table = sm.stats.anova_lm(model, typ=2)
+
+    ss_total = table["sum_sq"].sum()
+    ms_total = ss_total / (N - 1)
+
+    results = []
+    for factor_label, row_name in [(factor1, f"C({factor1})"),
+                                    (factor2, f"C({factor2})"),
+                                    ("상호작용", f"C({factor1}):C({factor2})")]:
+        ss = table.loc[row_name, "sum_sq"]
+        df_factor = table.loc[row_name, "df"]
+        H = ss / ms_total
+        p = 1 - stats.chi2.cdf(H, df_factor)
+        results.append({"요인": factor_label, "H": round(H, 4),
+                        "df": int(df_factor), "p값": round(p, 4),
+                        "유의성": "유의" if p < ALPHA else "비유의"})
+    return pd.DataFrame(results)
+
+# 가정 위반 시(정규성/등분산성 미충족) 비모수검정으로 대체
+if check_assumptions(df):
+    srh_results = pd.concat(
+        [scheirer_ray_hare(df, metric, "ModelSet", "Case").assign(지표=metric)
+         for metric in METRICS], ignore_index=True
+    )
