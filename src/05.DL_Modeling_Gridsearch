@@ -3,7 +3,6 @@
 # ============================================================
 # 3개 알고리즘(MLP/TabNet/FT-Transformer), Case1~4별로
 # 하이퍼파라미터 그리드서치 수행. 가중치(weight_on)도 탐색
-# 파라미터에 포함. SMOTE는 ML과 동일하게 Case2/4 Train에만 적용.
 # ============================================================
 # import os, warnings, time, pickle, itertools
 # import numpy as np
