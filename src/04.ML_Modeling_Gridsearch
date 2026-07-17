@@ -75,7 +75,10 @@ PARAM_GRIDS = {
     },
 }
 
-# Case2/4에만 SMOTE 적용 (Train에만)
 for case_name, config in CASE_CONFIG.items():
+    steps = []
     if config["smote"]:
-        smote = SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)
+        steps.append(("smote", SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)))
+    steps.append(("clf", base_model))
+    pipe = ImbPipeline(steps)
+    # 이후 pipe.fit(X_train, y_train) 호출 시 SMOTE가 Train에만 자동 적용됨
