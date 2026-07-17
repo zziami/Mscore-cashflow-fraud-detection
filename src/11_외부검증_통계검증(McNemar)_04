@@ -49,5 +49,46 @@ def evaluate_external(data, xgb_prob, mlp_prob):
     }
 
 # 감리제재(13개사), 회생폐지(53개사) 각각 평가
-fss_result   = evaluate_external(fss_data, fss_xgb_prob, fss_mlp_prob)
-rehab_result = evaluate_external(rehab_data, rehab_xgb_prob, rehab_mlp_prob)
+with open(os.path.join(PKL_DIR, "14_XGB_Case4_on_ModelB.pkl"), "rb") as f:
+    xgb_model = pickle.load(f)
+with open(os.path.join(PKL_DIR, "16_2a_MLP_Case3_ModelB.pkl"), "rb") as f:
+    mlp_model = pickle.load(f)
+mlp_model.to(DEVICE)
+
+def evaluate_external(fname, label):
+    df = pd.read_excel(os.path.join(EXT_DIR, fname))
+    data = df[[COMPANY_COL, TARGET] + VARS_B].dropna().reset_index(drop=True)
+    X = data[VARS_B].values.astype(np.float32)
+
+    xgb_prob = xgb_model.predict_proba(X)[:, 1]
+    mlp_prob = predict_mlp_proba1(mlp_model, X)
+
+    data["XGB_pred"] = (xgb_prob >= THRESHOLD).astype(int)
+    data["MLP_pred"] = (mlp_prob >= THRESHOLD).astype(int)
+
+    company_df = data.groupby(COMPANY_COL).agg({
+        TARGET: "max", "XGB_pred": "max", "MLP_pred": "max",
+    }).reset_index()
+
+    n_company = len(company_df)
+    xgb_recall = company_df["XGB_pred"].sum() / n_company
+    mlp_recall = company_df["MLP_pred"].sum() / n_company
+
+    both     = ((company_df["XGB_pred"]==1) & (company_df["MLP_pred"]==1)).sum()
+    xgb_only = ((company_df["XGB_pred"]==1) & (company_df["MLP_pred"]==0)).sum()
+    mlp_only = ((company_df["XGB_pred"]==0) & (company_df["MLP_pred"]==1)).sum()
+    neither  = ((company_df["XGB_pred"]==0) & (company_df["MLP_pred"]==0)).sum()
+
+    table = [[both, xgb_only], [mlp_only, neither]]
+    result = mcnemar(table, exact=True)
+
+    return {
+        "기업수": n_company,
+        "XGB_Recall": round(xgb_recall, 4),
+        "MLP_Recall": round(mlp_recall, 4),
+        "McNemar_p값": round(result.pvalue, 4),
+        "유의성": "유의" if result.pvalue < 0.05 else "비유의",
+    }
+
+fss_result   = evaluate_external("감리제재_scaled.xlsx", "감리제재_13개사")
+rehab_result = evaluate_external("회생폐지_scaled.xlsx", "회생폐지_53개사")
