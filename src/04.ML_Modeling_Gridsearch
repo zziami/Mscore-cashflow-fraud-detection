@@ -1,0 +1,60 @@
+# ============================================================
+# STEP 14. ML GridSearch
+# ============================================================
+# LR/RF/XGB/LGBM 4개 알고리즘, Case1~4(SMOTE·Scaling 조합)별로
+# 하이퍼파라미터 그리드서치 수행. 가중치(class_weight/scale_pos_weight/
+# is_unbalance)도 depth 등과 같은 탐색 파라미터로 포함시켜,
+# GridSearchCV가 조합을 한 번에 비교하도록 구성.
+# SMOTE는 Case2/4에만, Train 데이터에만 적용.
+# ============================================================
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from imblearn.over_sampling import SMOTE
+
+RANDOM_STATE = 42
+SMOTE_RATIO = 0.5
+
+# Case별 SMOTE·Scaling 적용 여부
+CASE_CONFIG = {
+    "Case1": {"scaled": False, "smote": False},
+    "Case2": {"scaled": False, "smote": True},
+    "Case3": {"scaled": True,  "smote": False},
+    "Case4": {"scaled": True,  "smote": True},
+}
+
+# 가중치를 off/on 외부 트랙으로 분리하지 않고, 그리드서치 파라미터로 통합
+PARAM_GRIDS = {
+    "LR": {
+        "clf__C": [0.1, 1.0, 10.0],
+        "clf__class_weight": [None, "balanced"],
+    },
+    "RF": {
+        "clf__n_estimators": [100, 200],
+        "clf__max_depth": [5, 10],
+        "clf__min_samples_leaf": [1, 5],
+        "clf__class_weight": [None, "balanced"],
+    },
+    "XGB": {
+        "clf__learning_rate": [0.05, 0.1],
+        "clf__n_estimators": [100, 200],
+        "clf__max_depth": [3, 5],
+        "clf__gamma": [0, 0.3],
+        "clf__min_child_weight": [1, 5],
+        "clf__scale_pos_weight": [1, "auto"],  # Case별 실측 불균형 비율로 동적 계산
+    },
+    "LGBM": {
+        "clf__learning_rate": [0.05, 0.1],
+        "clf__num_leaves": [31, 50],
+        "clf__min_child_samples": [10, 30],
+        "clf__is_unbalance": [False, True],
+    },
+}
+
+# Case2/4에만 SMOTE 적용 (Train에만)
+for case_name, config in CASE_CONFIG.items():
+    if config["smote"]:
+        smote = SMOTE(sampling_strategy=SMOTE_RATIO, random_state=RANDOM_STATE)
