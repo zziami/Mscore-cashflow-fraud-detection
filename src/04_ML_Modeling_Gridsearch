@@ -39,6 +39,14 @@
 # RANDOM_STATE = 42
 # SMOTE_RATIO = 0.5
 
+
+def ks_stat(y_true, y_prob):
+    d = pd.DataFrame({"y": y_true, "p": y_prob}).sort_values("p", ascending=False)
+    n_pos, n_neg = y_true.sum(), len(y_true) - y_true.sum()
+    tpr = (d["y"].cumsum() / n_pos).values
+    fpr = ((1 - d["y"]).cumsum() / n_neg).values
+    return round(float(np.max(tpr - fpr)), 4)
+
 # Case별 SMOTE·Scaling 적용 여부
 CASE_CONFIG = {
     "Case1": {"scaled": False, "smote": False},
