@@ -7,14 +7,8 @@
 # 2단계 단변량: Mann-Whitney U (1단계 유의 시 원인 변수 특정)
 #   - Bonferroni 보정: alpha = 0.05 / 13개 변수
 # ============================================================
-import numpy as np
-import pandas as pd
 from scipy.stats import mannwhitneyu
 import dcor
-
-ALPHA = 0.05
-VARS_B = ["DSRI","GMI","AQI","SGI","DEPI","SGAI","TATA","LVGI",
-          "z1_내부자채권","z2_단기대여금","z3_단기차입금","z4_예수금","z5_이자수익"]
 
 def get_fn_tp(y_true, y_prob, threshold, data):
     y_pred = (y_prob >= threshold).astype(int)
@@ -23,31 +17,26 @@ def get_fn_tp(y_true, y_prob, threshold, data):
     return data[fn_mask].copy(), data[tp_mask].copy()
 
 def run_energy_test(fn_df, tp_df, cols):
-    """1단계: 다변량 — FN·TP 그룹 전체 분포 차이 검정"""
+    """1단계: 다변량 — 정규성 가정 불필요, 소표본 순열검정"""
     X = fn_df[cols].dropna().values
     Y = tp_df[cols].dropna().values
     result = dcor.homogeneity.energy_test(X, Y, num_resamples=999)
     return result.statistic, result.p_value
 
 def run_mannwhitney_all(fn_df, tp_df, cols):
-    """2단계: 단변량 — 변수별 Mann-Whitney U, Bonferroni 보정"""
+    """2단계: 단변량 — Bonferroni 보정(0.05/13)"""
     bonf_alpha = ALPHA / len(cols)
     rows = []
     for col in cols:
-        fn_vals = fn_df[col].dropna().values
-        tp_vals = tp_df[col].dropna().values
+        fn_vals, tp_vals = fn_df[col].dropna().values, tp_df[col].dropna().values
         stat, p = mannwhitneyu(fn_vals, tp_vals, alternative="two-sided")
-        rows.append({
-            "변수": col, "U": round(stat, 2), "p값": round(p, 4),
-            "유의성": "유의" if p < bonf_alpha else "비유의",
-            "FN_중앙값": round(np.median(fn_vals), 4),
-            "TP_중앙값": round(np.median(tp_vals), 4),
-        })
+        rows.append({"변수": col, "U": round(stat, 2), "p값": round(p, 4),
+                     "유의성": "유의" if p < bonf_alpha else "비유의",
+                     "FN_중앙값": round(np.median(fn_vals), 4),
+                     "TP_중앙값": round(np.median(tp_vals), 4)})
     return pd.DataFrame(rows)
 
 # XGB(Case4), MLP(Case3) 각각 FN/TP 분리 후 검정
 xgb_fn, xgb_tp = get_fn_tp(y_test, xgb_prob, 0.5, data)
-mlp_fn, mlp_tp = get_fn_tp(y_test, mlp_prob, 0.5, data)
-
 xgb_energy_stat, xgb_energy_p = run_energy_test(xgb_fn, xgb_tp, VARS_B)
 xgb_mw = run_mannwhitney_all(xgb_fn, xgb_tp, VARS_B)
