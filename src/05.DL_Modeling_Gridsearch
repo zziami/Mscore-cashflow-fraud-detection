@@ -5,11 +5,25 @@
 # 하이퍼파라미터 그리드서치 수행. 가중치(weight_on)도 탐색
 # 파라미터에 포함. SMOTE는 ML과 동일하게 Case2/4 Train에만 적용.
 # ============================================================
-import torch
-import torch.nn as nn
-import itertools
-from pytorch_tabnet.tab_model import TabNetClassifier
-from imblearn.over_sampling import SMOTE
+# import os, warnings, time, pickle, itertools
+# import numpy as np
+# import pandas as pd
+# import torch
+# import torch.nn as nn
+# from scipy.stats import ks_2samp
+# from torch.utils.data import DataLoader, TensorDataset
+# from pytorch_tabnet.tab_model import TabNetClassifier
+# from sklearn.model_selection import StratifiedGroupKFold
+# from sklearn.metrics import (accuracy_score, precision_score, recall_score,
+#                              f1_score, fbeta_score, roc_auc_score,
+#                              average_precision_score, matthews_corrcoef,
+#                              confusion_matrix)
+# from imblearn.over_sampling import SMOTE
+# import openpyxl
+# from openpyxl.styles import PatternFill, Font, Alignment
+
+# warnings.filterwarnings("ignore")
+
 
 RANDOM_STATE = 42
 SMOTE_RATIO = 0.5
