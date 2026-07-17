@@ -1,0 +1,733 @@
+"""
+25_분식탐지_RAG_대시보드.py
+실행: python 25_분식탐지_RAG_대시보드.py
+브라우저: http://127.0.0.1:8050
+
+pip install dash plotly langchain langchain-openai langchain-community
+pip install langchain-text-splitters faiss-cpu openai tiktoken
+"""
+
+import os
+import pickle
+import warnings
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import dash
+from dash import dcc, html, Input, Output, State, callback
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+
+warnings.filterwarnings("ignore")
+
+# ── API 키 ────────────────────────────────────────────────────────────────────
+os.environ["OPENAI_API_KEY"] = 
+
+# ── Config ────────────────────────────────────────────────────────────────────
+BASE = r"D:\\1차현황\\1차-모델a_b비교"
+CFG = {
+    "data":    BASE + r"",
+    "model_a": BASE + r"",
+    "model_b": BASE + r"",
+    "rag_doc": r"D:\\1차현황\\2차-금감원외부검증데이터\\감리제재_RAG문서.txt",
+}
+
+VARS_A = ["DSRI","GMI","AQI","SGI","DEPI","SGAI","TATA","LVGI"]
+VARS_B = VARS_A + ["z1_내부자채권","z2_단기대여금","z3_단기차입금","z4_예수금","z5_이자수익"]
+TARGET = "Y"
+
+VAR_KOR = {
+    "DSRI":"매출채권 증가율","GMI":"매출총이익률 변화","AQI":"자산품질 변화",
+    "SGI":"매출 증가율","DEPI":"감가상각률 변화","SGAI":"판관비율 변화",
+    "TATA":"총발생액","LVGI":"부채 증가율",
+    "z1_내부자채권":"내부자채권","z2_단기대여금":"단기대여금",
+    "z3_단기차입금":"단기차입금","z4_예수금":"예수금","z5_이자수익":"이자수익",
+}
+
+RISK_MAP = [
+    (0.7, 1.1, "매우 높음", "#e74c3c"),
+    (0.5, 0.7, "높음",     "#e67e22"),
+    (0.3, 0.5, "보통",     "#f39c12"),
+    (0.0, 0.3, "낮음",     "#2ecc71"),
+]
+
+# ── RAG 구축 ──────────────────────────────────────────────────────────────────
+
+print("RAG 구축 중...")
+loader = TextLoader(CFG["rag_doc"], encoding="utf-8")
+docs   = loader.load()
+chunks = RecursiveCharacterTextSplitter(
+    chunk_size=200, chunk_overlap=20,
+    separators=["===", "\\n\\n", "\\n"]
+).split_documents(docs)
+print(f"  청크: {len(chunks)}개")
+
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+#vectordb   = FAISS.from_documents(chunks, embeddings)
+if os.path.exists("faiss_index"):
+    vectordb = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+else:
+    loader = TextLoader(CFG["rag_doc"], encoding="utf-8")
+    docs   = loader.load()
+    chunks = RecursiveCharacterTextSplitter(
+        chunk_size=200, chunk_overlap=20,
+        separators=["===", "\n\n", "\n"]
+    ).split_documents(docs)
+    vectordb = FAISS.from_documents(chunks, embeddings)
+    vectordb.save_local("faiss_index")
+    
+retriever  = vectordb.as_retriever(search_kwargs={"k": 4})
+llm        = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+
+def fmt_docs(docs):
+    return "\\n\\n".join(d.page_content for d in docs)
+
+# 동적 프롬프트 구성요소 (분식 위험 등급별 지침)
+
+REPORT_INSTRUCTIONS = {
+    "매우 높음": "분식 위험이 매우 심각합니다. {context}의 실제 제재 사례를 강력히 인용하여 발생 가능한 법적 리스크와 엄중한 관리 대책을 촉구하세요.",
+    "높음": "분식 위험이 감지되었습니다. 정상 기업과 비교하여 수치가 왜곡된 부분을 지적하고, {context}를 참고하여 정밀 실사 및 내부통제 강화를 권고하세요.",
+    "보통": "전반적으로 양호하나 일부 지표에 주의가 필요합니다. 업종 평균 대비 변동성이 큰 항목을 설명하고, 잠재적 리스크를 예방하기 위한 모니터링을 제안하세요.",
+    "낮음": "이 기업은 재무 건전성이 매우 우수합니다. {context}와 같은 부정 사례와 대조되는 이 기업의 투명성과 안정적인 지표를 강조하며 안전함을 안내하세요.",
+}
+
+# 공통 템플릿 (위의 지침이 {instruction} 자리에 들어갑니다)
+RAW_TEMPLATE = """당신은 비상장 제조기업 전문 회계 분석가입니다.
+분석 결과에 따라 아래 지침에 맞춰 리포트를 작성하세요.
+
+[분석 지침]
+{instruction}
+
+[분석 요청]
+{question}
+
+[작성 지침]
+- 3~5문장으로 간결하게
+- "{risk_label}" 등급에 맞는 어조를 유지할 것
+- "~로 판단됩니다", "~가 필요합니다" 또는 "~로 보입니다" 형식 마무리
+
+[분석 리포트]"""
+
+# # 3. 기존의 rag_chain 정의는 삭제하거나 아래처럼 간단히 표시합니다.
+# # (실제 체인 생성은 분석 버튼을 누를 때 콜백 함수 내부에서 진행할 것입니다.)
+
+# print("RAG 시스템 준비 완료 (등급별 동적 리포트 모드)")
+
+
+
+# Simple prompt template to combine retrieved context and the user's question.
+# This prevents a NameError when `PROMPT` is referenced below.
+PROMPT = PromptTemplate(
+    input_variables=["context", "question"],
+    template=("Context:\\n{context}\\n\\n"
+              "Question:\\n{question}\\n\\n"
+              "응답은 간결하게 작성하세요.")
+)
+
+rag_chain = (
+    {"context": retriever | fmt_docs, "question": RunnablePassthrough()}
+    | PROMPT | llm | StrOutputParser()
+)
+print("RAG 구축 완료")
+
+# ── 모델 & 데이터 ─────────────────────────────────────────────────────────────
+def load_model(path):
+    with open(path, "rb") as f:
+        obj = pickle.load(f)
+    return obj if isinstance(obj, dict) else {"model": obj, "scaler": None}
+
+def get_proba(md, X_df, vlist):
+    clf = md["model"]
+    sc  = md.get("scaler")
+    X   = sc.transform(X_df[vlist]) if sc else X_df[vlist].values
+    return float(clf.predict_proba(X)[:, 1][0])
+
+def get_top3(md, vlist):
+    clf = md["model"]
+    try:
+        fi  = clf.feature_importances_
+        idx = np.argsort(fi)[::-1][:3]
+        return [(vlist[i], round(float(fi[i]), 4)) for i in idx]
+    except:
+        try:
+            c   = np.abs(clf.coef_[0])
+            idx = np.argsort(c)[::-1][:3]
+            return [(vlist[i], round(float(c[i]), 4)) for i in idx]
+        except:
+            return []
+
+def get_risk(p):
+    for lo, hi, label, color in RISK_MAP:
+        if lo <= p < hi:
+            return label, color
+    return "매우 높음", "#e74c3c"
+
+print("모델 로딩...")
+ma = load_model(CFG["model_a"])
+mb = load_model(CFG["model_b"])
+
+print("데이터 로딩...")
+df_all   = pd.read_excel(CFG["data"])
+ind_mean = df_all.groupby("업종코드")[VARS_B].mean()
+codes    = sorted(df_all["거래소코드"].astype(str).unique().tolist())
+print(f"  {len(df_all)}행 완료")
+
+# ── Dash ──────────────────────────────────────────────────────────────────────
+
+app = dash.Dash(__name__)
+app.title = "분식회계 탐지 대시보드"
+
+app = dash.Dash(__name__)
+app.title = "분식회계 탐지 대시보드"
+
+app.layout = html.Div(
+    [
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.H2(
+                            "분식회계 탐지 대시보드",
+                            style={"margin": "0", "color": "white", "fontSize": "21px"},
+                        ),
+                        html.P(
+                            "비상장 제조기업 | Beneish M-Score + 한국특화 변수 | RAG 분석",
+                            style={"margin": "4px 0 0", "color": "#bdc3c7", "fontSize": "11px"},
+                        ),
+                    ],
+                    style={
+                        "background": "#2c3e50",
+                        "padding": "14px 24px",
+                        "borderBottom": "3px solid #3498db",
+                    },
+                ),
+            ]
+        ),
+
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Label("거래소코드", style={"fontWeight": "600", "fontSize": "12px"}),
+                        dcc.Dropdown(
+                            id="dd-code",
+                            options=[
+                                {"label": f"{c} {n}", "value": str(c)}
+                                for c, n in df_all[["거래소코드", "회사명"]].drop_duplicates().values
+                            ],
+                            placeholder="코드 선택...",
+                            searchable=True,
+                            style={"width": "260px", "fontSize": "12px"},
+                        ),
+                    ]
+                ),
+                html.Div(
+                    [
+                        html.Label("회계년도", style={"fontWeight": "600", "fontSize": "12px"}),
+                        dcc.Dropdown(
+                            id="dd-year",
+                            placeholder="연도",
+                            style={"width": "120px", "fontSize": "12px"},
+                        ),
+                    ],
+                    style={"marginLeft": "14px"},
+                ),
+                html.Button(
+                    "분석",
+                    id="btn-analyze",
+                    style={
+                        "marginLeft": "14px",
+                        "marginTop": "16px",
+                        "padding": "7px 24px",
+                        "backgroundColor": "#3498db",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "4px",
+                        "cursor": "pointer",
+                        "fontSize": "12px",
+                        "fontWeight": "600",
+                    },
+                ),
+            ],
+            style={
+                "display": "flex",
+                "alignItems": "flex-end",
+                "justifyContent": "flex-end",
+                "padding": "12px 24px",
+                "background": "#f8f9fa",
+                "borderBottom": "1px solid #dee2e6",
+            },
+        ),
+
+        html.Div(id="area-result", style={"padding": "18px 24px"}),
+    ],
+    style={"fontFamily": "Malgun Gothic, sans-serif", "background": "#f0f2f5", "minHeight": "100vh"},
+)
+
+
+# 콜백 로직 (동적리포트)
+
+@callback(
+    Output("dd-year","options"),
+    Output("dd-year","value"),
+    Input("dd-code","value"),
+)
+def cb_years(code):
+    if not code:
+        return [], None
+    yrs = sorted(
+        df_all[df_all["거래소코드"].astype(str)==str(code)]["회계년도"].unique(),
+        reverse=True)
+    return [{"label":str(y),"value":y} for y in yrs], (yrs[0] if yrs else None)
+
+# 분석버튼 클릭시 결과 출력 (분석로직포함)
+@callback(
+    Output("area-result","children"),
+    Input("btn-analyze","n_clicks"),
+    #Input("analyze-btn", "n_clicks"),
+    State("dd-code","value"),
+    State("dd-year","value"),
+    prevent_initial_call=True,
+)
+def cb_analyze(n, code, year):
+    if not code or not year:
+        return html.Div("거래소코드와 회계년도를 선택해주세요.", style={"color": "red"})
+    
+# 1. 현재 대시보드에서 사용 중인 전체 데이터프레임(예: df)에서 해당 행 추출
+    # 이미지 상에서 사용하시는 데이터프레임 변수명을 'df'라고 가정합니다. 
+    row = df_all[(df_all['거래소코드'].astype(str) == str(code)) & (df_all['회계년도'] == year)]
+    
+    if row.empty:
+        return html.Div("데이터를 찾을 수 없습니다.", style={"color": "red"})
+
+    # 2. actual_y 추출 (가장 중요한 부분)
+    # 데이터프레임 안에 '분식여부'를 나타내는 컬럼이 'target' 혹은 'y' 등으로 존재해야 합니다.
+    # 만약 컬럼명을 정확히 모르신다면, 현재 프로젝트에서 0과 1이 담긴 컬럼명을 아래에 넣으세요.
+    actual_y = int(row[TARGET].values[0]) if TARGET in row.columns else None
+
+
+    actual_txt = f"실제: {'⚠️ 부실' if actual_y==1 else '✅ 정상'}" \
+                    if actual_y is not None else ""
+    
+    company = row["회사명"].values[0] if "회사명" in row.columns else f"코드 {code}"
+
+    # ── 게이지 (애니메이션 포함) ──────────────────────────────────────────────
+
+    pb = get_proba(mb, row, VARS_B)
+
+    # --- risk_color 정의 (gauge_fig 생성 전에 반드시 필요) ---
+    if pb >= 0.7:
+        risk_color = "#e74c3c"  # 고위험 (빨강)
+    elif pb >= 0.5:
+        risk_color = "#e67e22"  # 위험 (주황)
+    elif pb >= 0.3:
+        risk_color = "#f1c40f"  # 주의 (노랑)
+    else:
+        risk_color = "#27ae60"  # 정상 (초록)
+
+# 그 다음에 매니저님 코드인 gauge_fig = go.Figure(...) 가 와야 합니다.
+    gauge_fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=pb * 100,
+        number={"suffix": "%", "font": {"size": 32, "color": risk_color}},
+        gauge={
+            "axis": {
+                "range": [0, 100],
+                "tickwidth": 1,
+                "tickcolor": "gray",
+                "tickvals": [0, 30, 50, 70, 100],
+                "ticktext": ["0%", "30%", "50%", "70%", "100%"],
+            },
+            "bar": {"color": risk_color, "thickness": 0.3},
+            "bgcolor": "white",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0,  30], "color": "#d5f5e3"},
+                {"range": [30, 50], "color": "#fef9e7"},
+                {"range": [50, 70], "color": "#fdebd0"},
+                {"range": [70,100], "color": "#fadbd8"},
+            ],
+            "threshold": {
+            "line": {"color": "#2c3e50", "width": 4},
+            "thickness": 0.9,
+            "value": 50,
+            },
+        },
+
+        title={
+            "text": f"Model B 분식 위험 확률<br><span style='font-size:11px;color:#95a5a6'>임계값 50% 기준</span>",
+            "font": {"size": 12},
+            # "x": 0.95,
+            # "y": 0.05,
+            # "xanchor": "right",
+            # "yanchor": "bottom",
+        },
+    ))
+
+    gauge_fig.update_layout(
+        title=dict(
+        text="Model B 분식 위험 확률<br><span style='font-size:11px;color:#95a5a6'>임계값 50% 기준</span>",
+        x=0.95,
+        y=0.05,
+        xanchor="right",
+        yanchor="bottom",
+        font=dict(size=11),
+    ),
+        transition={'duration': 1500, 'easing': 'cubic-in-out'}, # 0에서 목표치까지 1.5초간 애니메이션
+        height=300,
+        margin=dict(l=30, r=30, t=50, b=20),
+        paper_bgcolor="white"
+    )
+    # ── 방사형 ────────────────────────────────────────────────────────────────
+    pa = get_proba(ma, row, VARS_A)   # ← 추가
+    cv_a = row[VARS_A].values[0].tolist()   # ← 추가
+    cv_b = row[VARS_B].values[0].tolist()   # ← 추가
+    ind_code = row["업종코드"].values[0] if "업종코드" in row.columns else None
+
+
+        # 기존 rfig 전체 교체
+    iv  = ind_mean.loc[ind_code][VARS_B].values.tolist() \
+        if ind_code in ind_mean.index else [0]*len(VARS_B)
+
+    # 공통 레이블 (VARS_B 13개 기준)
+    lbl = [VAR_KOR.get(v,v) for v in VARS_B]
+
+    # Model A는 8개라 나머지 5개 0으로 패딩
+    cv_a_padded = cv_a + [0]*5
+
+    lbl_c    = lbl + [lbl[0]]
+    cv_a_c   = cv_a_padded + [cv_a_padded[0]]
+    cv_b_c   = cv_b + [cv_b[0]]
+    iv_c     = iv + [iv[0]]
+
+    rfig_a = go.Figure()
+
+    rfig_a.add_trace(go.Scatterpolar(
+        r=iv_c,
+        theta=lbl_c,
+        fill="toself",
+        fillcolor="rgba(150,150,150,0.1)",
+        line=dict(color="gray", width=1.5, dash="dot"),
+        name="업종평균"
+    ))
+
+    rfig_a.add_trace(go.Scatterpolar(
+        r=cv_a_c,
+        theta=lbl_c,
+        fill="toself",
+        fillcolor="rgba(255,180,0,0.15)",
+        line=dict(color="#f39c12", width=2),
+        name="Model A"
+    ))
+
+    rfig_b = go.Figure()
+
+    rfig_b.add_trace(go.Scatterpolar(
+        r=iv_c,
+        theta=lbl_c,
+        fill="toself",
+        fillcolor="rgba(150,150,150,0.1)",
+        line=dict(color="gray", width=1.5, dash="dot"),
+        name="업종평균"
+    ))
+
+    rfig_b.add_trace(go.Scatterpolar(
+        r=cv_b_c,
+        theta=lbl_c,
+        fill="toself",
+        fillcolor="rgba(231,76,60,0.15)",
+        line=dict(color="#e74c3c", width=2.5),
+        name="Model B"
+    ))
+
+   
+    rfig_a.update_layout(
+    polar=dict(radialaxis=dict(visible=True)),
+    title=dict(text="Model A (8변수)", font=dict(size=11)),
+    legend=dict(x=1.0, y=0.0, xanchor="right", yanchor="bottom", font=dict(size=10)),
+    margin=dict(l=10, r=10, t=30, b=10),
+    height=320,
+    paper_bgcolor="white",
+    )
+
+    rfig_b.update_layout(
+        polar=dict(radialaxis=dict(visible=True)),
+        title=dict(text="Model B (13변수)", font=dict(size=11)),
+        legend=dict(x=1.0, y=0.0, xanchor="right", yanchor="bottom", font=dict(size=10)),
+        margin=dict(l=10, r=10, t=30, b=10),
+        height=320,
+        paper_bgcolor="white",
+    )
+
+
+    # ── 연도별 추이 ───────────────────────────────────────────────────────────
+    years_avail = sorted(
+        df_all[df_all["거래소코드"].astype(str)==str(code)]["회계년도"].unique()
+    )
+    trend_probs = []
+    for yr in years_avail:
+        r_yr = df_all[
+            (df_all["거래소코드"].astype(str)==str(code)) &
+            (df_all["회계년도"]==yr)
+        ]
+        if len(r_yr) > 0:
+            try:
+                trend_probs.append(get_proba(mb, r_yr.iloc[[0]], VARS_B))
+            except:
+                trend_probs.append(None)
+
+    tfig = go.Figure()
+    colors_trend = ["#e74c3c" if (p is not None and p >= 0.5) else "#3498db"
+                    for p in trend_probs]
+    tfig.add_trace(go.Scatter(
+        x=[str(y) for y in years_avail],
+        y=trend_probs,
+        mode="lines+markers",
+        line=dict(color="#3498db", width=2.5),
+        marker=dict(
+            color=colors_trend,
+            size=10,
+            line=dict(color="white", width=2)
+        ),
+        name="분식위험확률",
+        hovertemplate="%{x}년: %{y:.1%}<extra></extra>",
+    ))
+    tfig.add_hline(
+        y=0.5, line_dash="dash", line_color="#e74c3c",
+        line_width=2, opacity=0.8,
+        annotation_text="임계값 0.5",
+        annotation_font_color="#e74c3c",
+        annotation_font_size=11,
+    )
+    tfig.update_layout(
+        title=dict(text="연도별 분식 위험 추이 (Model B)", font=dict(size=12)),
+        yaxis=dict(range=[0, 1.05], tickformat=".0%",
+                   gridcolor="#f0f0f0"),
+        xaxis=dict(gridcolor="#f0f0f0"),
+        margin=dict(l=30, r=20, t=45, b=30),
+        height=300,
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+    )
+
+    # ── Top3 ──────────────────────────────────────────────────────────────────
+    top3 = get_top3(mb, VARS_B)
+    max_s = max(s for _, s in top3)
+   
+    print(f"[TOP3 DEBUG] {[(v, s) for v, s in top3]}")
+    top3_colors = ["#e74c3c", "#e67e22", "#27ae60"]
+    top3_items = []
+
+   
+    for i, (v, s) in enumerate(top3):
+         # pct 계산 부분 교체
+        pct = round((s / max_s) * 100, 1)
+        top3_items.append(
+            html.Div([
+                html.Div([
+                    html.Div([
+                        html.Span(f"{i+1}",
+                            style={
+                                "background": top3_colors[i],
+                                "color": "white",
+                                "borderRadius": "50%",
+                                "width": "22px", "height": "22px",
+                                "display": "inline-flex",
+                                "alignItems": "center",
+                                "justifyContent": "center",
+                                "fontSize": "11px", "fontWeight": "600",
+                                "marginRight": "8px", "flexShrink": "0",
+                            }),
+                        html.Span(f"{VAR_KOR.get(v,v)}",
+                            style={"fontWeight": "600", "fontSize": "12px"}),
+                        html.Span(f" ({v})",
+                            style={"color": "#95a5a6", "fontSize": "10px"}),
+                    ], style={"display": "flex", "alignItems": "center"}),
+                    html.Span(f"현재값: {row[v].values[0]:.3f}",
+                        style={"color": "#7f8c8d", "fontSize": "11px"}),
+                ], style={"display": "flex", "justifyContent": "space-between",
+                          "marginBottom": "6px"}),
+
+# ── 핵심 애니메이션 수정 구간 ───────────────────────────────────
+        html.Div(
+            html.Div(
+                className="grow-bar",
+                style={
+                    # "width": f"{pct}%",               # 목표 너비 (실제 표시 길이)
+                    "width": "0%",
+                    "background": top3_colors[i],
+                    "borderRadius": "4px",
+                    "height": "100%",
+                    "--target-width": f"{pct}%",   # 목표값 전달
+                    "--bar-color": top3_colors[i], 
+                    "--delay": f"{i * 0.2}s",      # 좌→우 순차
+                    #"--dur": f"{0.4 + (pct/100)*1.2}s"  # 최소 0.4s ~ 최대 약 1.6s (예시)
+                }
+            ),
+            style={
+                "height": "10px",
+                "width": "100%",  
+                "background": "#f0f0f0",
+                "borderRadius": "4px",
+                "overflow": "hidden",
+                "marginBottom": "12px",
+            }
+        ),
+  
+            ])
+         )
+
+    # ── RAG 리포트 ────────────────────────────────────────────────────────────
+    top3_str = ", ".join([
+        f"{VAR_KOR.get(v,v)}({v}={row[v].values[0]:.3f})"
+        for v, _ in top3
+    ])
+
+    risk_label, risk_color = get_risk(pb)
+    instruction = REPORT_INSTRUCTIONS[risk_label].format(context="FSS 감리제재 사례")
+    query = (
+        f"[분석 지침]\n{instruction}\n\n"
+        f"[분석 대상]\n{company}, {year}년, 분식위험 {pb:.1%} ({risk_label})\n"
+        f"주요 변수: {top3_str}"
+    )
+
+
+
+    try:
+        report = rag_chain.invoke(query)
+    except Exception as e:
+        report = f"리포트 생성 오류: {e}"
+
+    # ── 레이아웃 ──────────────────────────────────────────────────────────────
+
+    return html.Div([
+
+        # 위험도 헤더
+        html.Div([
+            html.Div([
+                html.H3(f"{company}  |  {year}년",
+                        style={"margin": "0", "fontSize": "16px"}),
+                html.Div([
+                    html.Span("분식 위험도: ", style={"fontSize": "13px"}),
+                    html.Span(risk_label,
+                        style={"fontSize": "22px", "fontWeight": "700",
+                               "color": risk_color}),
+                    html.Span(f"  ({pb:.1%})",
+                        style={"fontSize": "13px", "color": risk_color}),
+                    html.Span(f"  {actual_txt}",
+                        style={"fontSize": "12px", "color": "#7f8c8d",
+                               "marginLeft": "10px"}),
+                ], style={"marginTop": "5px"}),
+            ]),
+        ], style={
+            "background": "white", "padding": "12px 18px",
+            "borderRadius": "8px", "marginBottom": "12px",
+            "borderLeft": f"5px solid {risk_color}",
+            "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+            "display": "flex",   #추가
+            "alignItems": "center",   #추가
+            "gap": "20px",          # 회사명/년도/위험도 한 줄로
+
+        }),
+
+
+        # 1층: [방사형 2개 나란히] + 게이지 (2열)
+        html.Div([
+            # 왼쪽: 방사형 A+B 나란히
+            html.Div([
+                html.Div([
+                    dcc.Graph(figure=rfig_a, config={"displayModeBar": False}, style={"height": "300px"})
+                ], style={"flex": "1", "minWidth": "0"}),
+                html.Div([
+                    dcc.Graph(figure=rfig_b, config={"displayModeBar": False}, style={"height": "300px"})
+                ], style={"flex": "1", "minWidth": "0"}),
+            ], style={
+                "display": "flex", "gap": "0px",
+                "background": "white", "borderRadius": "8px",
+                "padding": "6px", "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+                "overflow": "hidden",
+            }),
+            
+            # 오른쪽: 게이지
+            html.Div([
+                dcc.Graph(figure=gauge_fig, config={"displayModeBar": False}, style={"height": "300px"})
+            ], style={
+                "background": "white", "borderRadius": "8px",
+                "padding": "6px", "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+            }),
+        ], style={
+            "display": "grid",
+            "gridTemplateColumns": "1fr 1fr",  # 2칸 동일
+            "gap": "12px",
+            "marginBottom": "12px",
+        }),
+
+
+
+        # 2층: 추이 차트 + Top3 (2열 그리드)
+        html.Div([
+            # 연도별 추이
+            html.Div([
+                dcc.Graph(figure=tfig, config={"displayModeBar": False}, style={"height": "350px"})
+            ], style={
+                "background": "white", "borderRadius": "8px",
+                "padding": "6px", "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+            }),
+            # Top3
+            html.Div([
+                html.H4("주요 위험 변수 Top 3 (Model B 기준)",
+                        style={"margin": "0 0 14px",
+                            "fontSize": "12px", "fontWeight": "600"}),
+                *top3_items,
+            ], style={
+                "background": "white", "borderRadius": "8px",
+                "padding": "14px 16px",
+                "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+                "height": "100%",        # ← 이거 추가
+                "boxSizing": "border-box", # ← 이거 추가
+                "display": "flex",           # ← 추가
+                "flexDirection": "column",   # ← 추가
+                "justifyContent": "space-between",  # ← 추가
+            }),
+        ], style={
+            "display": "grid",
+            "gridTemplateColumns": "1fr 1fr",
+            "gap": "12px",
+            "marginBottom": "12px",
+        }),
+        
+
+        # 분석 리포트 (하단 전체너비)
+        html.Div([
+            html.H4("📋 분식위험 분석 리포트",
+                style={"margin": "0 0 10px", "fontSize": "12px",
+                       "color": "#2c3e50",
+                       "borderBottom": "2px solid #3498db",
+                       "paddingBottom": "5px"}),
+            html.P(report,
+                style={"fontSize": "12px", "lineHeight": "1.9",
+                       "color": "#2c3e50", "margin": "0",
+                       "whiteSpace": "pre-wrap"}),
+            html.Div(
+                html.Span("※ FSS 감리제재 사례 기반 RAG 분석",
+                    style={"fontSize": "10px", "color": "#95a5a6"}),
+                style={"marginTop": "10px",
+                       "borderTop": "1px solid #ecf0f1",
+                       "paddingTop": "6px"}),
+        ], style={
+            "background": "white", "padding": "14px 18px",
+            "borderRadius": "8px",
+            "boxShadow": "0 1px 4px rgba(0,0,0,0.08)",
+        }),
+
+    ])
+
+
+if __name__ == "__main__":
+    print("\\n브라우저: http://127.0.0.1:8050")
+    app.run(debug=True, use_reloader=False, port=8050)
