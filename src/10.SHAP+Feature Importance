@@ -1,0 +1,76 @@
+# ============================================================
+# STEP 20. SHAP + Feature Importance — 최종 확정 모델 2개   - 코드 일부 발췌 
+#   메인: Type B Case4 XGB
+#   서브: Type B Case3 MLP
+# ============================================================
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import shap
+from sklearn.metrics import roc_auc_score
+
+VARS_B = ["DSRI","GMI","AQI","SGI","DEPI","SGAI","TATA","LVGI",
+          "z1_내부자채권","z2_단기대여금","z3_단기차입금","z4_예수금","z5_이자수익"]
+
+def predict_mlp_proba1(model, X):
+    model.eval()
+    with torch.no_grad():
+        logit = model(torch.FloatTensor(X)).cpu().numpy()
+    return 1 / (1 + np.exp(-logit))
+
+class MLPWrapper(nn.Module):
+    """SHAP GradientExplainer용 (N,) → (N,1) 출력 래퍼"""
+    def __init__(self, base_model):
+        super().__init__()
+        self.base_model = base_model
+    def forward(self, x):
+        return self.base_model(x).unsqueeze(1)
+
+# ── [1] SHAP ──────────────────────────────────────
+# XGB: TreeExplainer (트리 구조 직접 활용)
+xgb_explainer = shap.TreeExplainer(xgb_model)
+xgb_shap_values = xgb_explainer.shap_values(X_test)
+xgb_shap_importance = pd.DataFrame({
+    "변수": VARS_B, "평균절대SHAP": np.abs(xgb_shap_values).mean(axis=0)
+}).sort_values("평균절대SHAP", ascending=False)
+
+# MLP: GradientExplainer (신경망용, BatchNorm/Dropout에 안정적)
+background = torch.FloatTensor(X_test[np.random.choice(len(X_test), min(100, len(X_test)), replace=False)])
+mlp_wrapped = MLPWrapper(mlp_model)
+mlp_wrapped.eval()
+mlp_explainer = shap.GradientExplainer(mlp_wrapped, background)
+mlp_shap_values = mlp_explainer.shap_values(torch.FloatTensor(X_test))
+if isinstance(mlp_shap_values, list):
+    mlp_shap_values = mlp_shap_values[0]
+mlp_shap_values = np.array(mlp_shap_values).reshape(len(X_test), len(VARS_B))
+mlp_shap_importance = pd.DataFrame({
+    "변수": VARS_B, "평균절대SHAP": np.abs(mlp_shap_values).mean(axis=0)
+}).sort_values("평균절대SHAP", ascending=False)
+
+# ── [2] Feature Importance (SHAP과 다른 방법으로 교차검증) ──
+# XGB: 네이티브 Feature Importance (트리 분기 기여도)
+xgb_importance = pd.DataFrame({
+    "변수": VARS_B, "Importance": xgb_model.feature_importances_
+}).sort_values("Importance", ascending=False)
+
+# MLP: 순열 중요도 (변수 하나씩 무작위로 섞었을 때 AUC 하락폭)
+rng = np.random.RandomState(42)
+baseline_auc = roc_auc_score(y_test, predict_mlp_proba1(mlp_model, X_test))
+perm_rows = []
+for i, var in enumerate(VARS_B):
+    drops = []
+    for _ in range(10):
+        X_perm = X_test.copy()
+        rng.shuffle(X_perm[:, i])
+        auc_perm = roc_auc_score(y_test, predict_mlp_proba1(mlp_model, X_perm))
+        drops.append(baseline_auc - auc_perm)
+    perm_rows.append({"변수": var, "Importance(AUC하락평균)": round(np.mean(drops), 5)})
+mlp_permutation_importance = pd.DataFrame(perm_rows).sort_values("Importance(AUC하락평균)", ascending=False)
+
+# ── [3] 교차검증 — SHAP 1위와 Feature Importance 1위가 일치하는지 확인 ──
+xgb_cross_check = {
+    "SHAP_1위": xgb_shap_importance.iloc[0]["변수"],
+    "FeatureImportance_1위": xgb_importance.iloc[0]["변수"],
+    "일치여부": xgb_shap_importance.iloc[0]["변수"] == xgb_importance.iloc[0]["변수"]
+}
