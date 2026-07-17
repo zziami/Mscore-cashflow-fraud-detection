@@ -1,0 +1,53 @@
+# ============================================================
+# STEP 22. 외부검증 — 감리제재 13개사 + 회생폐지 53개사
+#   XGB(Case4, 메인) vs MLP(Case3, 서브)
+# ============================================================
+# [원칙] 재학습 금지, threshold 재탐색 금지 — 고정된 모델(pkl) +
+#        고정 threshold(0.5)로 예측만 수행
+# [기업단위 집계] 한 기업이 여러 회계연도(행)로 존재하므로,
+#        거래소코드 기준으로 묶어 "여러 연도 중 하나라도 분식으로
+#        예측되면 그 기업은 탐지된 것"(max 집계)으로 평가
+# [통계검정] McNemar's exact test — XGB vs MLP가 같은 기업을
+#        각각 맞췄는지/틀렸는지 짝지어 비교
+# ============================================================
+import numpy as np
+import pandas as pd
+from statsmodels.stats.contingency_tables import mcnemar
+
+THRESHOLD = 0.5
+COMPANY_COL = "거래소코드"
+TARGET = "Y"
+
+def evaluate_external(data, xgb_prob, mlp_prob):
+    data["XGB_pred"] = (xgb_prob >= THRESHOLD).astype(int)
+    data["MLP_pred"] = (mlp_prob >= THRESHOLD).astype(int)
+
+    # 기업 단위 집계 (max: 한 연도라도 걸리면 탐지된 것으로 간주)
+    company_df = data.groupby(COMPANY_COL).agg({
+        TARGET: "max", "XGB_pred": "max", "MLP_pred": "max",
+    }).reset_index()
+
+    n_company = len(company_df)
+    xgb_recall = company_df["XGB_pred"].sum() / n_company
+    mlp_recall = company_df["MLP_pred"].sum() / n_company
+
+    # McNemar's exact test (기업 단위, 짝지어진 비교)
+    both    = ((company_df["XGB_pred"]==1) & (company_df["MLP_pred"]==1)).sum()
+    xgb_only = ((company_df["XGB_pred"]==1) & (company_df["MLP_pred"]==0)).sum()
+    mlp_only = ((company_df["XGB_pred"]==0) & (company_df["MLP_pred"]==1)).sum()
+    neither  = ((company_df["XGB_pred"]==0) & (company_df["MLP_pred"]==0)).sum()
+
+    table = [[both, xgb_only], [mlp_only, neither]]
+    result = mcnemar(table, exact=True)
+
+    return {
+        "기업수": n_company,
+        "XGB_Recall": round(xgb_recall, 4),
+        "MLP_Recall": round(mlp_recall, 4),
+        "McNemar_p값": round(result.pvalue, 4),
+        "유의성": "유의" if result.pvalue < 0.05 else "비유의",
+    }
+
+# 감리제재(13개사), 회생폐지(53개사) 각각 평가
+fss_result   = evaluate_external(fss_data, fss_xgb_prob, fss_mlp_prob)
+rehab_result = evaluate_external(rehab_data, rehab_xgb_prob, rehab_mlp_prob)
