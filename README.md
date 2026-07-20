@@ -26,7 +26,7 @@
 - 변수 한계 식별: 가지급금 단독 임계값 분석 시 상위 10% 구간에서도 부실발생률 0% → 단일변수로는 탐지 불가 확인
 - Feature 구성:
   * TypeA: Beneish M-Score 8개(DSRI·GMI·AQI·SGI·DEPI·SGAI·LVGI·TATA), 글로벌 기준 베이스라인
-  * TypeB: TypeA + 한국형 변수 5개(Z1 내부자채권·Z2 단기대여금·Z3 단기차입금·Z4 예수금·Z5 이자수익), 자금유출 구조 반영
+  * TypeB: TypeA + 한국형 변수 5개, 자금유출 구조 반영
 - 통계적 입증: Fisher's Exact Test로 Z1×Z5 결합 조건의 유의성 확증(OR 2.52, p<0.0001) — 가지급금 단독은 무관하나 이자수익과 결합 시 분식과 유의하게 연결
 
 ## 4. Model & Algorithms
