@@ -1,5 +1,11 @@
 #  Mscore-cashflow-fraud-detection
 
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-111111?style=flat-square&logo=xgboost&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)
+![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-F7931E?style=flat-square&logo=scikit-learn&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-blue.svg)
+
 # 자금유출 기반 회계분식 탐지를 위한 한국형 변수 확장 및 모델 검증 - 단독프로젝트 (우수상 수상)
 
 ---
