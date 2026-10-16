@@ -1,7 +1,7 @@
 """
 25_분식탐지_RAG_대시보드.py
 실행: python 25_분식탐지_RAG_대시보드.py
-브라우저: http://127.0.0.1:8050
+ 
 
 pip install dash plotly langchain langchain-openai langchain-community
 pip install langchain-text-splitters faiss-cpu openai tiktoken
@@ -25,16 +25,14 @@ from langchain_core.output_parsers import StrOutputParser
 
 warnings.filterwarnings("ignore")
 
-# ── API 키 ────────────────────────────────────────────────────────────────────
-os.environ["OPENAI_API_KEY"] = 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE = r"D:\\1차현황\\1차-모델a_b비교"
+BASE =  
 CFG = {
     "data":    BASE + r"",
     "model_a": BASE + r"",
     "model_b": BASE + r"",
-    "rag_doc": r"D:\\1차현황\\2차-금감원외부검증데이터\\감리제재_RAG문서.txt",
+    "rag_doc":  ",
 }
 
 VARS_A = ["DSRI","GMI","AQI","SGI","DEPI","SGAI","TATA","LVGI"]
