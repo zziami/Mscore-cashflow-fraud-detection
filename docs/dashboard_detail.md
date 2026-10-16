@@ -4,6 +4,12 @@
 
 > 🔒 **Data Privacy Notice**  
 > 기업 정보 보호 및 보안 준수를 위해 대시보드 화면 내 기업명 및 일부 민감 정보는 가림 처리되었습니다.
+><br>
+### 🟢 [위쪽 화면] 정상 기업 분석 예시
+![정상 기업 예시 화면](../images/dashboard_01_search.png)
+<br>
+### 🔴 [아래쪽 화면] 분식 위험 기업 분석 예시
+![분식 기업 예시 화면](../images/dashboard_01_search.png)
 
 ---
 
