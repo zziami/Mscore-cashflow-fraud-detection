@@ -7,6 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
 
 # 자금유출 기반 회계분식 탐지를 위한 한국형 변수 확장 및 모델 검증 - 단독프로젝트 (우수상 수상)
+> ### 🔥 **[Solo Project] 기획부터 데이터 전처리, 모델링, RAG 구축 및 대시보드 구현까지 전 과정 단독 100% 수행**
 
 ---
 
