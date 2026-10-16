@@ -22,7 +22,6 @@
 # 📊 분식회계 탐지 대시보드 상세 소개
 > **비상장 제조기업의 재무 데이터로 분식 위험 확률을 계산하고, 유사 감리제재 사례를 검색해 분석 리포트를 생성하는 대시보드입니다. (Dash + Plotly, LangChain RAG)**  <br>
 > *(아래 이미지를 클릭하시면 대시보드 7단계 상세 소개 페이지로 이동합니다.)*<br>
-
 [![Dashboard Main Preview](images/dashboard_01_search.png)](docs/dashboard_detail.md)
 
  
